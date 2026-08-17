@@ -1,0 +1,88 @@
+---
+- name: VPA - Open ServiceNow Ticket
+  hosts: localhost
+  gather_facts: false
+  vars:
+    snow_host: "{{ lookup('env', 'SN_HOST') }}"
+    snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
+    snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
+    correlation_id: "vpa-rightsizing:{{ alert_namespace }}:{{ alert_container }}:{{ alert_name }}"
+
+  tasks:
+    - name: Fetch VPA objects in the alert namespace for context
+      kubernetes.core.k8s_info:
+        api_version: autoscaling.k8s.io/v1
+        kind: VerticalPodAutoscaler
+        namespace: "{{ alert_namespace }}"
+      register: vpa_list
+
+    - name: Extract VPA recommendation for the target container
+      set_fact:
+        vpa_recommendation: >-
+          {{
+            vpa_list.resources
+            | default([])
+            | map(attribute='status.recommendation.containerRecommendations', default=[])
+            | select('defined')
+            | flatten
+            | selectattr('containerName', 'equalto', alert_container)
+            | list
+            | first
+            | default({})
+          }}
+
+    - name: Build ticket description
+      set_fact:
+        ticket_description: |
+          == VPA Right-Sizing Alert ==
+          Cluster:    {{ cluster_name | default('local') }}
+          Namespace:  {{ alert_namespace }}
+          Pod:        {{ alert_pod | default('n/a') }}
+          Container:  {{ alert_container }}
+          Alert:      {{ alert_name }}
+          Action:     {{ alert_action | default('n/a') }}
+          Severity:   {{ alert_severity | default('n/a') }}
+
+          == Alert Details ==
+          {{ alert_description | default('n/a') }}
+
+          == VPA Recommendations ==
+          Target CPU:    {{ vpa_recommendation.target.cpu | default('N/A') }}
+          Target Memory: {{ vpa_recommendation.target.memory | default('N/A') }}
+          Lower Bound CPU:    {{ vpa_recommendation.lowerBound.cpu | default('N/A') }}
+          Lower Bound Memory: {{ vpa_recommendation.lowerBound.memory | default('N/A') }}
+          Upper Bound CPU:    {{ vpa_recommendation.upperBound.cpu | default('N/A') }}
+          Upper Bound Memory: {{ vpa_recommendation.upperBound.memory | default('N/A') }}
+
+          == Suggested Remediation Options ==
+          Option A (ArgoCD GitOps): Update resource requests in Git and let ArgoCD sync.
+            - Recommended CPU request:    {{ vpa_recommendation.target.cpu | default('N/A') }}
+            - Recommended Memory request: {{ vpa_recommendation.target.memory | default('N/A') }}
+
+          Option B (VPA Enforce): Run the "VPA - Enforce Mode" job template in AAP to
+            temporarily set VPA updateMode to Auto, letting VPA apply the recommendation
+            on next pod restart, then revert to Off.
+
+          Correlation ID: {{ correlation_id }}
+
+    - name: Create ServiceNow Incident
+      servicenow.itsm.incident:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        state: new
+        caller_id: "{{ snow_user }}"
+        short_description: >-
+          [VPA] {{ alert_action | default('review') | upper }} recommended for {{ alert_container }}
+          in {{ alert_namespace }} on {{ cluster_name | default('local') }}
+        description: "{{ ticket_description }}"
+        impact: "3"
+        urgency: "3"
+        other:
+          correlation_id: "{{ correlation_id }}"
+      register: snow_incident
+
+    - name: Print ticket number
+      debug:
+        msg: "ServiceNow incident created: {{ snow_incident.record.number }} (correlation_id={{ correlation_id }})"

@@ -1,0 +1,42 @@
+---
+- name: VPA - Resolve ServiceNow Ticket
+  hosts: localhost
+  gather_facts: false
+  vars:
+    snow_host: "{{ lookup('env', 'SN_HOST') }}"
+    snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
+    snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
+    correlation_id: "vpa-rightsizing:{{ alert_namespace }}:{{ alert_container }}:{{ alert_name }}"
+
+  tasks:
+    - name: Find open incident for this alert via correlation_id
+      servicenow.itsm.incident_info:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        query:
+          - correlation_id: "= {{ correlation_id }}"
+      register: existing_incidents
+
+    - name: Filter to incidents that are not already closed/resolved
+      set_fact:
+        open_incidents: "{{ existing_incidents.records | default([]) | rejectattr('state', 'in', ['6', '7']) | list }}"
+
+    - name: Resolve incident(s) if found
+      servicenow.itsm.incident:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        state: resolved
+        number: "{{ item.number }}"
+        close_code: "Solved (Permanently)"
+        close_notes: "VPA alert resolved automatically. No further action needed."
+      loop: "{{ open_incidents }}"
+      when: open_incidents | length > 0
+
+    - name: Print outcome
+      debug:
+        msg: >-
+          {{ open_incidents | length }} incident(s) resolved for correlation_id={{ correlation_id }}
