@@ -2,7 +2,8 @@
 - name: VPA Right-Sizing Remediation
   hosts: all
   sources:
-    - ansible.eda.webhook:
+    - name: alertmanager_webhook
+      ansible.eda.webhook:
         port: 5000
 
   rules:
