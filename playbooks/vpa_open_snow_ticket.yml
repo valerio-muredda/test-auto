@@ -72,7 +72,7 @@
           username: "{{ snow_user }}"
           password: "{{ snow_password }}"
         state: new
-        caller_id: "{{ snow_user }}"
+        caller: "{{ snow_user }}"
         short_description: >-
           [VPA] {{ alert_action | default('review') | upper }} recommended for {{ alert_container }}
           in {{ alert_namespace }} on {{ cluster_name | default('local') }}
