@@ -11,39 +11,33 @@
       condition: >
         event.payload.status == "firing"
         and event.payload.commonLabels.category == "rightsizing"
-      action:
-        run_job_template:
-          name: "VPA - Open ServiceNow Ticket"
-          organization: "Default"
-          job_args:
-            extra_vars:
-              alert_name: "{{ event.payload.commonLabels.alertname }}"
-              alert_namespace: "{{ event.payload.commonLabels.namespace }}"
-              alert_pod: "{{ event.payload.commonLabels.pod | default('') }}"
-              alert_container: "{{ event.payload.commonLabels.container }}"
-              alert_action: "{{ event.payload.commonLabels.action | default('') }}"
-              alert_severity: "{{ event.payload.commonLabels.severity | default('') }}"
-              alert_description: "{{ event.payload.commonAnnotations.description | default('') }}"
-              cluster_name: "{{ event.payload.commonLabels.cluster | default('local') }}"
-
-    - name: Handle VPA rightsizing alert - apply GitOps remediation (Option A)
-      condition: >
-        event.payload.status == "firing"
-        and event.payload.commonLabels.category == "rightsizing"
-      action:
-        run_job_template:
-          name: "VPA - Remediate via GitOps (Option A)"
-          organization: "Default"
-          job_args:
-            extra_vars:
-              alert_name: "{{ event.payload.commonLabels.alertname }}"
-              alert_namespace: "{{ event.payload.commonLabels.namespace }}"
-              alert_pod: "{{ event.payload.commonLabels.pod | default('') }}"
-              alert_container: "{{ event.payload.commonLabels.container }}"
-              alert_action: "{{ event.payload.commonLabels.action | default('') }}"
-              alert_severity: "{{ event.payload.commonLabels.severity | default('') }}"
-              alert_description: "{{ event.payload.commonAnnotations.description | default('') }}"
-              cluster_name: "{{ event.payload.commonLabels.cluster | default('local') }}"
+      actions:
+        - run_job_template:
+            name: "VPA - Open ServiceNow Ticket"
+            organization: "Default"
+            job_args:
+              extra_vars:
+                alert_name: "{{ event.payload.commonLabels.alertname }}"
+                alert_namespace: "{{ event.payload.commonLabels.namespace }}"
+                alert_pod: "{{ event.payload.commonLabels.pod | default('') }}"
+                alert_container: "{{ event.payload.commonLabels.container }}"
+                alert_action: "{{ event.payload.commonLabels.action | default('') }}"
+                alert_severity: "{{ event.payload.commonLabels.severity | default('') }}"
+                alert_description: "{{ event.payload.commonAnnotations.description | default('') }}"
+                cluster_name: "{{ event.payload.commonLabels.cluster | default('local') }}"
+        - run_job_template:
+            name: "VPA - Remediate via GitOps (Option A)"
+            organization: "Default"
+            job_args:
+              extra_vars:
+                alert_name: "{{ event.payload.commonLabels.alertname }}"
+                alert_namespace: "{{ event.payload.commonLabels.namespace }}"
+                alert_pod: "{{ event.payload.commonLabels.pod | default('') }}"
+                alert_container: "{{ event.payload.commonLabels.container }}"
+                alert_action: "{{ event.payload.commonLabels.action | default('') }}"
+                alert_severity: "{{ event.payload.commonLabels.severity | default('') }}"
+                alert_description: "{{ event.payload.commonAnnotations.description | default('') }}"
+                cluster_name: "{{ event.payload.commonLabels.cluster | default('local') }}"
 
     - name: Handle VPA alert resolved
       condition: >
