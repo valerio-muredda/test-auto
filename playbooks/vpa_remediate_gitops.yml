@@ -155,7 +155,7 @@
         msg: "Opened PR: {{ pr_result.json.html_url }}"
       when: manifest_changed | bool
 
-    - name: Find related ServiceNow incident via correlation_id
+    - name: Find related ServiceNow incident(s) via correlation_id
       servicenow.itsm.incident_info:
         instance:
           host: "{{ snow_host }}"
@@ -166,21 +166,30 @@
       register: existing_incidents
       when: manifest_changed | bool
 
-    - name: Update ServiceNow ticket with PR link (Option A applied)
+    - name: Filter to incidents that are still open (not resolved/closed)
+      set_fact:
+        open_incidents: "{{ existing_incidents.records | default([]) | rejectattr('state', 'in', ['6', '7']) | list }}"
+      when: manifest_changed | bool
+
+    - name: Pick the most recently opened incident, if any
+      set_fact:
+        latest_open_incident: "{{ (open_incidents | sort(attribute='sys_created_on') | last) if (open_incidents | length > 0) else {} }}"
+      when: manifest_changed | bool
+
+    - name: Update the most recent open ServiceNow ticket with PR link (Option A applied)
       servicenow.itsm.incident:
         instance:
           host: "{{ snow_host }}"
           username: "{{ snow_user }}"
           password: "{{ snow_password }}"
         state: in_progress
-        number: "{{ item.number }}"
+        number: "{{ latest_open_incident.number }}"
         other:
           work_notes: >-
             Option A (GitOps) applied: opened Pull Request {{ pr_result.json.html_url }}
             to update {{ alert_container }} resources in {{ alert_namespace }}.
             ArgoCD will sync automatically once merged.
-      loop: "{{ existing_incidents.records | default([]) }}"
-      when: manifest_changed | bool and existing_incidents is defined and existing_incidents.records is defined
+      when: manifest_changed | bool and open_incidents | length > 0
 
     - name: Clean up local working directory
       ansible.builtin.file:

@@ -31,6 +31,24 @@
             | default({})
           }}
 
+    - name: Find existing incident(s) for this alert via correlation_id
+      servicenow.itsm.incident_info:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        query:
+          - correlation_id: "= {{ correlation_id }}"
+      register: existing_incidents
+
+    - name: Filter to incidents that are still open (not resolved/closed)
+      set_fact:
+        open_incidents: "{{ existing_incidents.records | default([]) | rejectattr('state', 'in', ['6', '7']) | list }}"
+
+    - name: Pick the most recently opened incident, if any
+      set_fact:
+        latest_open_incident: "{{ (open_incidents | sort(attribute='sys_created_on') | last) if (open_incidents | length > 0) else {} }}"
+
     - name: Build ticket description
       set_fact:
         ticket_description: |
@@ -65,7 +83,22 @@
 
           Correlation ID: {{ correlation_id }}
 
-    - name: Create ServiceNow Incident
+    - name: Update existing open incident instead of creating a duplicate
+      servicenow.itsm.incident:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        number: "{{ latest_open_incident.number }}"
+        other:
+          work_notes: >-
+            VPA alert still firing ({{ alert_name }} on {{ alert_container }} in {{ alert_namespace }}).
+            Latest recommendation: cpu={{ vpa_recommendation.target.cpu | default('N/A') }},
+            memory={{ vpa_recommendation.target.memory | default('N/A') }}.
+      when: open_incidents | length > 0
+      register: updated_incident
+
+    - name: Create ServiceNow Incident (only when no open incident already exists)
       servicenow.itsm.incident:
         instance:
           host: "{{ snow_host }}"
@@ -81,8 +114,13 @@
         urgency: "3"
         other:
           correlation_id: "{{ correlation_id }}"
+      when: open_incidents | length == 0
       register: snow_incident
 
-    - name: Print ticket number
+    - name: Print outcome
       debug:
-        msg: "ServiceNow incident created: {{ snow_incident.record.number }} (correlation_id={{ correlation_id }})"
+        msg: >-
+          {{ 'Updated existing incident ' + latest_open_incident.number
+             if open_incidents | length > 0
+             else 'Created new incident ' + snow_incident.record.number }}
+          (correlation_id={{ correlation_id }})
