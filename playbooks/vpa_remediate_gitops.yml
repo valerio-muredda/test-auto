@@ -156,10 +156,11 @@
           password: "{{ snow_password }}"
         state: in_progress
         number: "{{ item.number }}"
-        work_notes: >-
-          Option A (GitOps) applied: opened Pull Request {{ pr_result.json.html_url }}
-          to update {{ alert_container }} resources in {{ alert_namespace }}.
-          ArgoCD will sync automatically once merged.
+        other:
+          work_notes: >-
+            Option A (GitOps) applied: opened Pull Request {{ pr_result.json.html_url }}
+            to update {{ alert_container }} resources in {{ alert_namespace }}.
+            ArgoCD will sync automatically once merged.
       loop: "{{ existing_incidents.records | default([]) }}"
       when: existing_incidents is defined and existing_incidents.records is defined
 
