@@ -14,11 +14,21 @@
     github_repo_url: "https://github.com/{{ github_repo_owner }}/{{ github_repo_name }}.git"
     manifest_rel_path: "manifests/{{ app_name | default('stress-app') }}/deployment.yaml"
     correlation_id: "vpa-rightsizing:{{ alert_namespace }}:{{ alert_container | default('') }}:{{ alert_name | default('') }}"
-    run_ts: "{{ lookup('pipe', 'date +%s') }}"
-    work_dir: "/tmp/vpa-gitops-{{ alert_namespace }}-{{ alert_container | default('app') }}-{{ run_ts }}"
-    branch_name: "vpa-rightsizing/{{ alert_namespace }}-{{ alert_container | default('app') }}-{{ run_ts }}"
 
   tasks:
+    # NOTE: run_ts/work_dir/branch_name are computed once via set_fact (not in
+    # the play `vars:` block) because lookup('pipe', ...) is re-evaluated on
+    # every reference when used as a lazy `vars:` value, which would otherwise
+    # produce a different timestamp (and thus a different work_dir) per task.
+    - name: Compute a stable run timestamp and working paths
+      set_fact:
+        run_ts: "{{ lookup('pipe', 'date +%s') }}"
+
+    - name: Compute work_dir and branch_name from the stable timestamp
+      set_fact:
+        work_dir: "/tmp/vpa-gitops-{{ alert_namespace }}-{{ alert_container | default('app') }}-{{ run_ts }}"
+        branch_name: "vpa-rightsizing/{{ alert_namespace }}-{{ alert_container | default('app') }}-{{ run_ts }}"
+
     - name: Fetch VPA objects in the alert namespace for context
       kubernetes.core.k8s_info:
         api_version: autoscaling.k8s.io/v1
