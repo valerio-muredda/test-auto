@@ -1,0 +1,159 @@
+---
+# Option A (GitOps): Apply VPA recommendations by opening a PR against the
+# Git repo that ArgoCD watches. Once merged (or auto-synced), ArgoCD applies
+# the new resource requests/limits to the live Deployment.
+- name: VPA - Remediate via GitOps (Option A)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    snow_host: "{{ lookup('env', 'SN_HOST') }}"
+    snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
+    snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
+    github_repo_owner: "valerio-muredda"
+    github_repo_name: "test-auto"
+    github_repo_url: "https://github.com/{{ github_repo_owner }}/{{ github_repo_name }}.git"
+    manifest_rel_path: "manifests/{{ app_name | default('stress-app') }}/deployment.yaml"
+    correlation_id: "vpa-rightsizing:{{ alert_namespace }}:{{ alert_container | default('') }}:{{ alert_name | default('') }}"
+    run_ts: "{{ lookup('pipe', 'date +%s') }}"
+    work_dir: "/tmp/vpa-gitops-{{ alert_namespace }}-{{ alert_container | default('app') }}-{{ run_ts }}"
+    branch_name: "vpa-rightsizing/{{ alert_namespace }}-{{ alert_container | default('app') }}-{{ run_ts }}"
+
+  tasks:
+    - name: Fetch VPA objects in the alert namespace for context
+      kubernetes.core.k8s_info:
+        api_version: autoscaling.k8s.io/v1
+        kind: VerticalPodAutoscaler
+        namespace: "{{ alert_namespace }}"
+      register: vpa_list
+
+    - name: Extract VPA recommendation for the target container
+      set_fact:
+        vpa_recommendation: >-
+          {{
+            vpa_list.resources
+            | default([])
+            | map(attribute='status.recommendation.containerRecommendations', default=[])
+            | select('defined')
+            | flatten
+            | selectattr('containerName', 'equalto', alert_container)
+            | list
+            | first
+            | default({})
+          }}
+
+    - name: Fail fast if no VPA recommendation is available
+      fail:
+        msg: "No VPA recommendation found for container {{ alert_container }} in {{ alert_namespace }}"
+      when: vpa_recommendation.target is not defined
+
+    - name: Clone the GitOps repo using the GitHub token
+      ansible.builtin.git:
+        repo: "https://x-access-token:{{ github_token }}@github.com/{{ github_repo_owner }}/{{ github_repo_name }}.git"
+        dest: "{{ work_dir }}"
+        version: main
+      environment:
+        GIT_TERMINAL_PROMPT: "0"
+
+    - name: Create a remediation branch
+      ansible.builtin.command:
+        cmd: "git checkout -b {{ branch_name }}"
+        chdir: "{{ work_dir }}"
+
+    - name: Update container resources via a small Python helper (robust for multi-container pods)
+      ansible.builtin.script:
+        cmd: >-
+          update_resources.py
+          "{{ work_dir }}/{{ manifest_rel_path }}"
+          "{{ alert_container }}"
+          "{{ vpa_recommendation.target.cpu | default('') }}"
+          "{{ vpa_recommendation.target.memory | default('') }}"
+      register: update_result
+
+    - name: Show updated manifest diff
+      ansible.builtin.command:
+        cmd: "git diff"
+        chdir: "{{ work_dir }}"
+      register: git_diff
+
+    - name: Print diff
+      ansible.builtin.debug:
+        var: git_diff.stdout
+
+    - name: Configure git identity for commit
+      ansible.builtin.command:
+        cmd: "{{ item }}"
+        chdir: "{{ work_dir }}"
+      loop:
+        - "git config user.email vpa-automation@example.com"
+        - "git config user.name 'VPA Automation'"
+
+    - name: Commit the change
+      ansible.builtin.command:
+        cmd: >-
+          git commit -am "VPA right-sizing: update {{ alert_container }} resources in {{ alert_namespace }}
+          (cpu={{ vpa_recommendation.target.cpu | default('N/A') }}, memory={{ vpa_recommendation.target.memory | default('N/A') }})"
+        chdir: "{{ work_dir }}"
+
+    - name: Push the branch to GitHub
+      ansible.builtin.command:
+        cmd: "git push https://x-access-token:{{ github_token }}@github.com/{{ github_repo_owner }}/{{ github_repo_name }}.git {{ branch_name }}"
+        chdir: "{{ work_dir }}"
+
+    - name: Open a Pull Request via the GitHub API
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ github_repo_owner }}/{{ github_repo_name }}/pulls"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ github_token }}"
+          Accept: "application/vnd.github+json"
+        body_format: json
+        body:
+          title: "VPA right-sizing: {{ alert_container }} in {{ alert_namespace }}"
+          head: "{{ branch_name }}"
+          base: "main"
+          body: |
+            Automated VPA right-sizing recommendation.
+
+            - Namespace: {{ alert_namespace }}
+            - Container: {{ alert_container }}
+            - Recommended CPU request: {{ vpa_recommendation.target.cpu | default('N/A') }}
+            - Recommended Memory request: {{ vpa_recommendation.target.memory | default('N/A') }}
+            - Correlation ID: {{ correlation_id }}
+
+            Once merged, ArgoCD will automatically sync this change to the cluster.
+        status_code: [201]
+      register: pr_result
+
+    - name: Print PR URL
+      ansible.builtin.debug:
+        msg: "Opened PR: {{ pr_result.json.html_url }}"
+
+    - name: Find related ServiceNow incident via correlation_id
+      servicenow.itsm.incident_info:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        query:
+          - correlation_id: "= {{ correlation_id }}"
+      register: existing_incidents
+
+    - name: Update ServiceNow ticket with PR link (Option A applied)
+      servicenow.itsm.incident:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        state: in_progress
+        number: "{{ item.number }}"
+        work_notes: >-
+          Option A (GitOps) applied: opened Pull Request {{ pr_result.json.html_url }}
+          to update {{ alert_container }} resources in {{ alert_namespace }}.
+          ArgoCD will sync automatically once merged.
+      loop: "{{ existing_incidents.records | default([]) }}"
+      when: existing_incidents is defined and existing_incidents.records is defined
+
+    - name: Clean up local working directory
+      ansible.builtin.file:
+        path: "{{ work_dir }}"
+        state: absent
