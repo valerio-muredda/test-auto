@@ -89,6 +89,18 @@
       ansible.builtin.debug:
         var: git_diff.stdout
 
+    - name: Determine whether the manifest actually changed
+      ansible.builtin.set_fact:
+        manifest_changed: "{{ (git_diff.stdout | default('')) | length > 0 }}"
+
+    - name: No-op notice (resources already match the VPA recommendation)
+      ansible.builtin.debug:
+        msg: >-
+          No remediation needed: {{ alert_container }} in {{ alert_namespace }} already has the
+          recommended resources (cpu={{ vpa_recommendation.target.cpu | default('N/A') }},
+          memory={{ vpa_recommendation.target.memory | default('N/A') }}). Skipping PR.
+      when: not (manifest_changed | bool)
+
     - name: Configure git identity for commit
       ansible.builtin.command:
         cmd: "{{ item }}"
@@ -96,6 +108,7 @@
       loop:
         - "git config user.email vpa-automation@example.com"
         - "git config user.name 'VPA Automation'"
+      when: manifest_changed | bool
 
     - name: Commit the change
       ansible.builtin.command:
@@ -103,11 +116,13 @@
           git commit -am "VPA right-sizing: update {{ alert_container }} resources in {{ alert_namespace }}
           (cpu={{ vpa_recommendation.target.cpu | default('N/A') }}, memory={{ vpa_recommendation.target.memory | default('N/A') }})"
         chdir: "{{ work_dir }}"
+      when: manifest_changed | bool
 
     - name: Push the branch to GitHub
       ansible.builtin.command:
         cmd: "git push https://x-access-token:{{ github_token }}@github.com/{{ github_repo_owner }}/{{ github_repo_name }}.git {{ branch_name }}"
         chdir: "{{ work_dir }}"
+      when: manifest_changed | bool
 
     - name: Open a Pull Request via the GitHub API
       ansible.builtin.uri:
@@ -133,10 +148,12 @@
             Once merged, ArgoCD will automatically sync this change to the cluster.
         status_code: [201]
       register: pr_result
+      when: manifest_changed | bool
 
     - name: Print PR URL
       ansible.builtin.debug:
         msg: "Opened PR: {{ pr_result.json.html_url }}"
+      when: manifest_changed | bool
 
     - name: Find related ServiceNow incident via correlation_id
       servicenow.itsm.incident_info:
@@ -147,6 +164,7 @@
         query:
           - correlation_id: "= {{ correlation_id }}"
       register: existing_incidents
+      when: manifest_changed | bool
 
     - name: Update ServiceNow ticket with PR link (Option A applied)
       servicenow.itsm.incident:
@@ -162,7 +180,7 @@
             to update {{ alert_container }} resources in {{ alert_namespace }}.
             ArgoCD will sync automatically once merged.
       loop: "{{ existing_incidents.records | default([]) }}"
-      when: existing_incidents is defined and existing_incidents.records is defined
+      when: manifest_changed | bool and existing_incidents is defined and existing_incidents.records is defined
 
     - name: Clean up local working directory
       ansible.builtin.file:
