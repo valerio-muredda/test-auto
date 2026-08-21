@@ -1,0 +1,30 @@
+---
+# Chain 2: listens for the push notification ServiceNow sends when a VPA
+# Change Request's approval field transitions to "approved" (see the
+# "VPA CR Approval Push" Business Rule on the change_request table).
+# On approval, this is the ONLY thing that triggers the actual GitOps
+# remediation (Option A) - i.e. the Change Request is a real approval gate,
+# not just an informational ticket.
+- name: VPA Change Request Approval Gate
+  hosts: all
+  sources:
+    - name: snow_change_approval_webhook
+      ansible.eda.webhook:
+        port: 5001
+
+  rules:
+    - name: Trigger GitOps remediation when a VPA change request is approved
+      condition: >
+        event.payload.approval == "approved"
+        and event.payload.correlation_id is search("^vpa-rightsizing:")
+      action:
+        run_job_template:
+          name: "VPA - Remediate via GitOps (Option A)"
+          organization: "Default"
+          job_args:
+            extra_vars:
+              # correlation_id format: vpa-rightsizing:<namespace>:<container>:<alertname>
+              alert_namespace: "{{ event.payload.correlation_id.split(':')[1] }}"
+              alert_container: "{{ event.payload.correlation_id.split(':')[2] }}"
+              alert_name: "{{ event.payload.correlation_id.split(':')[3] }}"
+              change_number: "{{ event.payload.number }}"

@@ -14,6 +14,10 @@
     github_repo_url: "https://github.com/{{ github_repo_owner }}/{{ github_repo_name }}.git"
     manifest_rel_path: "manifests/{{ app_name | default('stress-app') }}/deployment.yaml"
     correlation_id: "vpa-rightsizing:{{ alert_namespace }}:{{ alert_container | default('') }}:{{ alert_name | default('') }}"
+    # Set by chain 2 (the "VPA Change Request Approval Gate" rulebook) when this
+    # playbook is triggered by a ServiceNow CR being approved, instead of being
+    # triggered directly off the alert. Empty when run manually/ad hoc.
+    change_number: "{{ change_number | default('') }}"
 
   tasks:
     # NOTE: run_ts/work_dir/branch_name are computed once via set_fact (not in
@@ -190,6 +194,34 @@
             to update {{ alert_container }} resources in {{ alert_namespace }}.
             ArgoCD will sync automatically once merged.
       when: manifest_changed | bool and open_incidents | length > 0
+
+    - name: Update the approved Change Request with the PR link (real gate closed the loop)
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        number: "{{ change_number }}"
+        other:
+          work_notes: >-
+            Approved change implemented: opened Pull Request {{ pr_result.json.html_url }}
+            to update {{ alert_container }} resources in {{ alert_namespace }}.
+            ArgoCD will sync automatically once merged. Please close this CR once you've
+            confirmed the rollout.
+      when: manifest_changed | bool and change_number | length > 0
+
+    - name: Note on the Change Request when no remediation was actually needed
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        number: "{{ change_number }}"
+        other:
+          work_notes: >-
+            Change approved, but {{ alert_container }} in {{ alert_namespace }} already matches
+            the recommended resources - nothing to change. No PR was opened.
+      when: not (manifest_changed | bool) and change_number | length > 0
 
     - name: Clean up local working directory
       ansible.builtin.file:

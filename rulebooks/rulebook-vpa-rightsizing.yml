@@ -26,7 +26,7 @@
                 alert_description: "{{ event.payload.commonAnnotations.description | default('') }}"
                 cluster_name: "{{ event.payload.commonLabels.cluster | default('local') }}"
         - run_job_template:
-            name: "VPA - Remediate via GitOps (Option A)"
+            name: "VPA - Open Change Request"
             organization: "Default"
             job_args:
               extra_vars:
@@ -43,12 +43,20 @@
       condition: >
         event.payload.status == "resolved"
         and event.payload.commonLabels.category == "rightsizing"
-      action:
-        run_job_template:
-          name: "VPA - Resolve ServiceNow Ticket"
-          organization: "Default"
-          job_args:
-            extra_vars:
-              alert_name: "{{ event.payload.commonLabels.alertname }}"
-              alert_namespace: "{{ event.payload.commonLabels.namespace }}"
-              alert_container: "{{ event.payload.commonLabels.container }}"
+      actions:
+        - run_job_template:
+            name: "VPA - Resolve ServiceNow Ticket"
+            organization: "Default"
+            job_args:
+              extra_vars:
+                alert_name: "{{ event.payload.commonLabels.alertname }}"
+                alert_namespace: "{{ event.payload.commonLabels.namespace }}"
+                alert_container: "{{ event.payload.commonLabels.container }}"
+        - run_job_template:
+            name: "VPA - Resolve Change Request"
+            organization: "Default"
+            job_args:
+              extra_vars:
+                alert_name: "{{ event.payload.commonLabels.alertname }}"
+                alert_namespace: "{{ event.payload.commonLabels.namespace }}"
+                alert_container: "{{ event.payload.commonLabels.container }}"

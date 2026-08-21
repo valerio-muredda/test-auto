@@ -1,0 +1,69 @@
+---
+# Chain 1 (alert resolves) -> if the underlying alert clears before a human
+# approved the Change Request, the proposal is stale: cancel it. If it was
+# already approved (GitOps remediation is running or already applied), leave
+# it alone and just leave a note - a human closes it once satisfied.
+- name: VPA - Resolve Change Request
+  hosts: localhost
+  gather_facts: false
+  vars:
+    snow_host: "{{ lookup('env', 'SN_HOST') }}"
+    snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
+    snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
+    correlation_id: "vpa-rightsizing:{{ alert_namespace }}:{{ alert_container }}:{{ alert_name }}"
+    closed_states: ["3", "4"]
+    pending_approvals: ["requested", "not requested"]
+
+  tasks:
+    - name: Find change request(s) for this alert via correlation_id
+      servicenow.itsm.change_request_info:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        query:
+          - correlation_id: "= {{ correlation_id }}"
+      register: existing_crs
+
+    - name: Filter to change requests that are not already closed/canceled
+      set_fact:
+        open_crs: "{{ existing_crs.records | default([]) | rejectattr('state', 'in', closed_states) | list }}"
+
+    - name: Split into still-pending-approval vs already-decided CRs
+      set_fact:
+        pending_crs: "{{ open_crs | selectattr('approval', 'in', pending_approvals) | list }}"
+        decided_crs: "{{ open_crs | rejectattr('approval', 'in', pending_approvals) | list }}"
+
+    - name: Cancel change request(s) still waiting on approval (alert cleared on its own)
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        state: canceled
+        number: "{{ item.number }}"
+        other:
+          work_notes: >-
+            VPA alert resolved before this change request was approved.
+            Auto-canceling: no remediation is needed anymore.
+      loop: "{{ pending_crs }}"
+
+    - name: Leave a note on already-approved/rejected change request(s)
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        number: "{{ item.number }}"
+        other:
+          work_notes: >-
+            VPA alert has resolved (namespace={{ alert_namespace }}, container={{ alert_container }}).
+            This CR was already {{ item.approval }}; please close it once you've confirmed the
+            remediation state, no further automated action will be taken.
+      loop: "{{ decided_crs }}"
+
+    - name: Print outcome
+      debug:
+        msg: >-
+          Canceled {{ pending_crs | length }} pending CR(s), annotated {{ decided_crs | length }}
+          already-decided CR(s) for correlation_id={{ correlation_id }}.

@@ -1,0 +1,138 @@
+---
+# Chain 1 (alert fires) -> this playbook opens a ServiceNow Change Request that
+# acts as the REAL approval gate for remediation. No remediation happens here;
+# it only records the proposal and asks a human to approve/reject the CR.
+# Deduplicated the same way as vpa_open_snow_ticket.yml: one open CR per
+# correlation_id, updated in place while the alert keeps firing.
+- name: VPA - Open Change Request
+  hosts: localhost
+  gather_facts: false
+  vars:
+    snow_host: "{{ lookup('env', 'SN_HOST') }}"
+    snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
+    snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
+    correlation_id: "vpa-rightsizing:{{ alert_namespace }}:{{ alert_container }}:{{ alert_name }}"
+    # Raw change_request.state values that mean the CR is no longer pending:
+    # 3=Closed, 4=Canceled
+    closed_states: ["3", "4"]
+
+  tasks:
+    - name: Fetch VPA objects in the alert namespace for context
+      kubernetes.core.k8s_info:
+        api_version: autoscaling.k8s.io/v1
+        kind: VerticalPodAutoscaler
+        namespace: "{{ alert_namespace }}"
+      register: vpa_list
+
+    - name: Extract VPA recommendation for the target container
+      set_fact:
+        vpa_recommendation: >-
+          {{
+            vpa_list.resources
+            | default([])
+            | map(attribute='status.recommendation.containerRecommendations', default=[])
+            | select('defined')
+            | flatten
+            | selectattr('containerName', 'equalto', alert_container)
+            | list
+            | first
+            | default({})
+          }}
+
+    - name: Find existing change request(s) for this alert via correlation_id
+      servicenow.itsm.change_request_info:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        query:
+          - correlation_id: "= {{ correlation_id }}"
+      register: existing_crs
+
+    - name: Filter to change requests that are still open (not closed/canceled)
+      set_fact:
+        open_crs: "{{ existing_crs.records | default([]) | rejectattr('state', 'in', closed_states) | list }}"
+
+    - name: Pick the most recently opened change request, if any
+      set_fact:
+        latest_open_cr: "{{ (open_crs | sort(attribute='sys_created_on') | last) if (open_crs | length > 0) else {} }}"
+
+    - name: Build change request description
+      set_fact:
+        cr_description: |
+          == VPA Right-Sizing Change Proposal ==
+          Cluster:    {{ cluster_name | default('local') }}
+          Namespace:  {{ alert_namespace }}
+          Pod:        {{ alert_pod | default('n/a') }}
+          Container:  {{ alert_container }}
+          Alert:      {{ alert_name }}
+          Action:     {{ alert_action | default('n/a') }}
+          Severity:   {{ alert_severity | default('n/a') }}
+
+          == Alert Details ==
+          {{ alert_description | default('n/a') }}
+
+          == VPA Recommendations ==
+          Target CPU:    {{ vpa_recommendation.target.cpu | default('N/A') }}
+          Target Memory: {{ vpa_recommendation.target.memory | default('N/A') }}
+          Lower Bound CPU:    {{ vpa_recommendation.lowerBound.cpu | default('N/A') }}
+          Lower Bound Memory: {{ vpa_recommendation.lowerBound.memory | default('N/A') }}
+          Upper Bound CPU:    {{ vpa_recommendation.upperBound.cpu | default('N/A') }}
+          Upper Bound Memory: {{ vpa_recommendation.upperBound.memory | default('N/A') }}
+
+          == Proposed Change ==
+          Update the Deployment resource requests/limits for container "{{ alert_container }}"
+          in namespace "{{ alert_namespace }}" to match the VPA target recommendation above,
+          via a Pull Request against the GitOps repository. ArgoCD will sync the change once
+          merged.
+
+          Approving this Change Request will automatically trigger the GitOps remediation
+          (opening the PR). Rejecting it, or letting the alert clear first, will cancel the
+          proposal without touching the cluster.
+
+          Correlation ID: {{ correlation_id }}
+
+    - name: Add a work note to the existing open CR instead of creating a duplicate
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        number: "{{ latest_open_cr.number }}"
+        other:
+          work_notes: >-
+            VPA alert still firing ({{ alert_name }} on {{ alert_container }} in {{ alert_namespace }}).
+            Latest recommendation: cpu={{ vpa_recommendation.target.cpu | default('N/A') }},
+            memory={{ vpa_recommendation.target.memory | default('N/A') }}.
+            Current approval status: {{ latest_open_cr.approval }}.
+      when: open_crs | length > 0
+      register: updated_cr
+
+    - name: Create ServiceNow Change Request (only when no open CR already exists)
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        type: normal
+        requested_by: "{{ snow_user }}"
+        short_description: >-
+          [VPA] {{ alert_action | default('review') | upper }} recommended for {{ alert_container }}
+          in {{ alert_namespace }} on {{ cluster_name | default('local') }}
+        description: "{{ cr_description }}"
+        risk: low
+        impact: low
+        other:
+          correlation_id: "{{ correlation_id }}"
+          approval: requested
+      when: open_crs | length == 0
+      register: snow_cr
+
+    - name: Print outcome
+      debug:
+        msg: >-
+          {{ 'Updated existing change request ' + latest_open_cr.number
+             if open_crs | length > 0
+             else 'Created new change request ' + snow_cr.record.number }}
+          (correlation_id={{ correlation_id }}). Waiting for human approval before GitOps
+          remediation is triggered.
