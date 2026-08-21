@@ -16,7 +16,7 @@
     - name: Trigger GitOps remediation when a VPA change request is approved
       condition: >
         event.payload.approval == "approved"
-        and event.payload.correlation_id is search("^vpa-rightsizing:")
+        and "vpa-rightsizing:" in event.payload.correlation_id
       action:
         run_job_template:
           name: "VPA - Remediate via GitOps (Option A)"
