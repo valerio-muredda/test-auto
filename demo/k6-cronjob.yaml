@@ -1,0 +1,35 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: k6-traffic-gen-cron
+  namespace: rightsizing-demo
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  suspend: true  # flip via demo/toggle-load.sh on|off, not by hand
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          containers:
+          - name: k6
+            image: grafana/k6:latest
+            command: ["k6", "run", "/scripts/script.js"]
+            resources:
+              requests:
+                cpu: 300m
+                memory: 256Mi
+              limits:
+                cpu: "1"
+                memory: 512Mi
+            volumeMounts:
+            - name: k6-script
+              mountPath: /scripts
+          restartPolicy: Never
+          volumes:
+          - name: k6-script
+            configMap:
+              name: k6-script
