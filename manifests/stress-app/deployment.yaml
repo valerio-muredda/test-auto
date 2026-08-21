@@ -28,6 +28,31 @@ spec:
           value: stress-app
         - name: MESSAGE
           value: OK
+        # fake-service built-in synthetic load generator: burns CPU and allocates
+        # memory FOR THE DURATION OF EACH REQUEST it handles (not a constant
+        # background load), so the actual pressure on the pod is proportional to
+        # incoming request concurrency - i.e. controlled entirely by whether the
+        # k6-traffic-gen-cron CronJob (see demo/toggle-load.sh) is generating
+        # traffic or not. Idle (no requests) => no extra load => usage decays
+        # toward baseline => VPA*OverProvisioned alerts. Under load => usage
+        # climbs toward the container's limits below => VPA*UnderProvisioned
+        # alerts (see vpa-aap-implementation.md §17 for sizing rationale).
+        - name: LOAD_CPU_CORES
+          value: "1"
+        - name: LOAD_CPU_PERCENTAGE
+          value: "100"
+        - name: TIMING_50_PERCENTILE
+          value: "250ms"
+        - name: TIMING_90_PERCENTILE
+          value: "450ms"
+        - name: TIMING_99_PERCENTILE
+          value: "650ms"
+        - name: TIMING_VARIANCE
+          value: "30"
+        - name: LOAD_MEMORY_PER_REQUEST
+          value: "4194304"
+        - name: LOAD_MEMORY_VARIANCE
+          value: "30"
         readinessProbe:
           httpGet:
             path: /
@@ -46,4 +71,10 @@ spec:
             memory: 250Mi
           limits:
             cpu: 406m
-            memory: 256Mi
+            # Bumped from 256Mi: under full load LOAD_MEMORY_PER_REQUEST can hold
+            # ~100 concurrent in-flight requests x ~4MiB (+/-30% variance) per pod,
+            # which needs headroom above the ~375Mi VPA needs to see (1.5x the
+            # 250Mi request) to fire VPAMemoryUnderProvisioned without OOMKilling
+            # the pod. Requests are left untouched so VPA's over/under-provisioned
+            # ratios still compare against the same 250Mi/224m baseline.
+            memory: 768Mi
