@@ -13,16 +13,15 @@
         port: 5001
 
   rules:
-    - name: DEBUG - print every event received (temporary, for troubleshooting)
-      condition: "true"
-      action:
-        print_event:
-          pretty: true
-
     - name: Trigger GitOps remediation when a VPA change request is approved
+      # The correlation_id prefix is already enforced by the "VPA CR Approval
+      # Push" Business Rule on the ServiceNow side before it ever posts here,
+      # so we only need to gate on approval + correlation_id being present.
+      # (NOTE: a bare `"x" in event.payload.foo` condition compiles to a LIST
+      # membership check, not a substring check, so avoid it for strings.)
       condition: >
         event.payload.approval == "approved"
-        and "vpa-rightsizing:" in event.payload.correlation_id
+        and event.payload.correlation_id is defined
       action:
         run_job_template:
           name: "VPA - Remediate via GitOps (Option A)"
