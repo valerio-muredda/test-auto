@@ -13,6 +13,12 @@
         port: 5001
 
   rules:
+    - name: DEBUG - print every event received (temporary, for troubleshooting)
+      condition: "true"
+      action:
+        print_event:
+          pretty: true
+
     - name: Trigger GitOps remediation when a VPA change request is approved
       condition: >
         event.payload.approval == "approved"
