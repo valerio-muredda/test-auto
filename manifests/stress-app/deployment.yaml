@@ -59,12 +59,20 @@ spec:
             port: 9090
           initialDelaySeconds: 5
           periodSeconds: 10
+          # Generous timeout/failureThreshold: under intentional synthetic load
+          # (see LOAD_CPU_* / LOAD_MEMORY_* above) response latency legitimately
+          # rises into the seconds - probes must tolerate that instead of
+          # crash-looping the pod, which would reset VPA's usage history.
+          timeoutSeconds: 10
+          failureThreshold: 6
         livenessProbe:
           httpGet:
             path: /
             port: 9090
-          initialDelaySeconds: 15
+          initialDelaySeconds: 20
           periodSeconds: 20
+          timeoutSeconds: 10
+          failureThreshold: 6
         resources:
           requests:
             cpu: 224m
