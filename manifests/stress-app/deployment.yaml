@@ -75,10 +75,10 @@ spec:
           failureThreshold: 6
         resources:
           requests:
-            cpu: 35m
+            cpu: 1101m
             memory: 250Mi
           limits:
-            cpu: 952m
+            cpu: 2202m
             # Bumped from 256Mi: under full load LOAD_MEMORY_PER_REQUEST can hold
             # ~100 concurrent in-flight requests x ~4MiB (+/-30% variance) per pod,
             # which needs headroom above the ~375Mi VPA needs to see (1.5x the
