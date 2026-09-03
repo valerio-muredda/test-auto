@@ -1,0 +1,15 @@
+---
+- name: TEMP - Check final CHG0030010 state
+  hosts: localhost
+  gather_facts: false
+  vars:
+    snow_host: "{{ lookup('env', 'SN_HOST') }}"
+    snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
+    snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
+  tasks:
+    - servicenow.itsm.change_request_info:
+        instance: {host: "{{ snow_host }}", username: "{{ snow_user }}", password: "{{ snow_password }}"}
+        number: CHG0030010
+      register: chg
+    - debug:
+        msg: "state={{ chg.records[0].state }} close_code={{ chg.records[0].close_code }} approval={{ chg.records[0].approval }}"
