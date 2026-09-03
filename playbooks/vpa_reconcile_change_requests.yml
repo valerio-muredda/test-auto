@@ -1,0 +1,110 @@
+---
+# General-purpose, idempotent self-healing sweep for VPA-originated Change
+# Requests, across EVERY alert/container/namespace (not tied to one
+# correlation_id or ticket number). It finds any CR that has already been
+# decided (approved or rejected) but is stuck in a non-terminal state, and
+# properly closes/cancels it.
+#
+# Why this is needed in addition to the real-time paths in
+# vpa_remediate_gitops.yml and vpa_resolve_change_request.yml: those close a
+# CR at the exact moment its outcome becomes known (auto-merge succeeds, or
+# the alert clears). That covers the normal path going forward, but can't
+# retroactively fix CRs that were approved before this closing logic existed,
+# or that fall through due to a one-off failure (a business rule webhook
+# timing out, an EDA activation restarting mid-event, a ServiceNow API
+# hiccup, etc). This sweep is the safety net for both:
+#   - "present": run it ad hoc to clean up any already-stuck CR right now.
+#   - "future": run it on a recurring AAP schedule so any straggler self-heals
+#     automatically without needing anyone to notice and run it by hand.
+#
+# Safe to run repeatedly and on a schedule: every action is guarded by
+# closed_states (never touches an already closed/canceled CR), and a grace
+# period skips anything decided too recently to avoid racing with a
+# legitimate in-flight chain-2 run that is already closing it right now.
+- name: VPA - Reconcile Change Requests
+  hosts: localhost
+  gather_facts: false
+  vars:
+    snow_host: "{{ lookup('env', 'SN_HOST') }}"
+    snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
+    snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
+    # This ServiceNow instance's Table API returns display values by default
+    # (e.g. state="Closed", approval="Requested"), not the raw numeric/lowercase
+    # codes the servicenow.itsm collection's docs assume -- match both forms,
+    # consistent with every other playbook in this repo.
+    closed_states: ["3", "4", "closed", "canceled", "Closed", "Canceled"]
+    pending_approvals: ["requested", "not requested", "Requested", "Not Requested"]
+    approved_values: ["approved", "Approved"]
+    # Skip anything decided more recently than this many minutes ago, so we
+    # never race with a legitimate in-flight chain-2 run for a CR that was
+    # just approved and is already being closed the normal way right now.
+    reconcile_grace_minutes: 5
+
+  tasks:
+    - name: Compute the grace-period cutoff timestamp
+      set_fact:
+        reconcile_cutoff: "{{ lookup('pipe', 'date -u -d \"-' + (reconcile_grace_minutes | string) + ' minutes\" \"+%Y-%m-%d %H:%M:%S\"') }}"
+
+    - name: Fetch every VPA-originated change request, of any alert/container/namespace
+      servicenow.itsm.api_info:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        resource: change_request
+        sysparm_query: "correlation_idSTARTSWITHvpa-rightsizing:"
+      register: all_crs
+
+    - name: Identify decided-but-not-closed change requests, outside the grace period
+      set_fact:
+        stuck_crs: >-
+          {{
+            (all_crs.record | default(all_crs.records | default([])))
+            | rejectattr('state', 'in', closed_states)
+            | rejectattr('approval', 'in', pending_approvals)
+            | selectattr('sys_updated_on', 'defined')
+            | selectattr('sys_updated_on', '<', reconcile_cutoff)
+            | list
+          }}
+
+    - name: Split stuck change requests into approved (close) vs rejected (cancel)
+      set_fact:
+        stuck_approved: "{{ stuck_crs | selectattr('approval', 'in', approved_values) | list }}"
+        stuck_rejected: "{{ stuck_crs | rejectattr('approval', 'in', approved_values) | list }}"
+
+    - name: Cancel stuck rejected change request(s) that were never closed out
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        state: canceled
+        number: "{{ item.number }}"
+        other:
+          work_notes: >-
+            Reconciliation sweep: this change request was rejected but never closed out.
+            Canceling it now so future alerts for this correlation_id open a fresh CR.
+      loop: "{{ stuck_rejected }}"
+      loop_control:
+        label: "{{ item.number }}"
+
+    - name: Properly close stuck approved change request(s) that were never closed out
+      ansible.builtin.include_tasks: tasks/close_change_request.yml
+      vars:
+        cr_number: "{{ item.number }}"
+        cr_close_notes: >-
+          Reconciliation sweep: this change request was approved and its remediation was
+          already implemented (or is no longer relevant), but it was never properly closed.
+          Closing it now so future alerts for this correlation_id open a fresh CR instead of
+          being folded into this one.
+      loop: "{{ stuck_approved }}"
+      loop_control:
+        label: "{{ item.number }}"
+
+    - name: Print reconciliation summary
+      debug:
+        msg: >-
+          Reconciliation complete: examined
+          {{ (all_crs.record | default(all_crs.records | default([]))) | length }} total VPA
+          change request(s); canceled {{ stuck_rejected | length }} stuck rejected CR(s) and
+          closed {{ stuck_approved | length }} stuck approved CR(s).
