@@ -32,10 +32,17 @@
       set_fact:
         open_crs: "{{ existing_crs.records | default([]) | rejectattr('state', 'in', closed_states) | list }}"
 
-    - name: Split into still-pending-approval vs already-decided CRs
+    - name: Split into still-pending-approval, approved, and rejected CRs
+      # This split matters for dedup: a CR left open forever (even just
+      # annotated, never closed/canceled) keeps matching future firings of the
+      # same alert via correlation_id in vpa_open_change_request.yml, silently
+      # folding a brand-new episode into an already-handled ticket instead of
+      # opening a fresh one. Every branch below now ends in a genuine
+      # closed/canceled state so the next episode gets its own CR.
       set_fact:
         pending_crs: "{{ open_crs | selectattr('approval', 'in', pending_approvals) | list }}"
-        decided_crs: "{{ open_crs | rejectattr('approval', 'in', pending_approvals) | list }}"
+        approved_crs: "{{ open_crs | rejectattr('approval', 'in', pending_approvals) | selectattr('approval', 'in', ['approved', 'Approved']) | list }}"
+        rejected_crs: "{{ open_crs | rejectattr('approval', 'in', pending_approvals) | rejectattr('approval', 'in', ['approved', 'Approved']) | list }}"
 
     - name: Cancel change request(s) still waiting on approval (alert cleared on its own)
       servicenow.itsm.change_request:
@@ -51,22 +58,42 @@
             Auto-canceling: no remediation is needed anymore.
       loop: "{{ pending_crs }}"
 
-    - name: Leave a note on already-approved/rejected change request(s)
+    - name: Cancel rejected change request(s) that are still open
+      # Normally these are canceled immediately by the CAB rejection itself;
+      # this just covers the edge case where a rejected CR is still lingering
+      # (e.g. rejected after the alert already re-fired once).
       servicenow.itsm.change_request:
         instance:
           host: "{{ snow_host }}"
           username: "{{ snow_user }}"
           password: "{{ snow_password }}"
+        state: canceled
         number: "{{ item.number }}"
         other:
           work_notes: >-
             VPA alert has resolved (namespace={{ alert_namespace }}, container={{ alert_container }}).
-            This CR was already {{ item.approval }}; please close it once you've confirmed the
-            remediation state, no further automated action will be taken.
-      loop: "{{ decided_crs }}"
+            This change request was rejected; closing it out now that the alert has cleared.
+      loop: "{{ rejected_crs }}"
+
+    - name: Properly close approved change request(s) now that the alert has cleared
+      # Covers the case where this playbook (not the auto-merge path in
+      # vpa_remediate_gitops.yml) is what finally observes the alert clearing --
+      # e.g. remediation was merged manually rather than auto-merged. Either
+      # way, the alert clearing is the confirmation signal that the approved
+      # change is no longer needed as an open ticket.
+      ansible.builtin.include_tasks: tasks/close_change_request.yml
+      vars:
+        cr_number: "{{ item.number }}"
+        cr_close_notes: >-
+          VPA alert for {{ alert_container }} in {{ alert_namespace }} has cleared, confirming
+          the approved remediation took effect (or the condition self-resolved). Closing.
+      loop: "{{ approved_crs }}"
+      loop_control:
+        label: "{{ item.number }}"
 
     - name: Print outcome
       debug:
         msg: >-
-          Canceled {{ pending_crs | length }} pending CR(s), annotated {{ decided_crs | length }}
-          already-decided CR(s) for correlation_id={{ correlation_id }}.
+          Canceled {{ pending_crs | length }} pending CR(s), canceled {{ rejected_crs | length }}
+          rejected CR(s), closed {{ approved_crs | length }} approved CR(s) for
+          correlation_id={{ correlation_id }}.

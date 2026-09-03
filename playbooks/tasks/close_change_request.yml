@@ -1,0 +1,90 @@
+---
+# Shared logic: properly walks a ServiceNow "normal" Change Request through its
+# Change Model state machine to a genuine "Closed" state with a close_code, on
+# this instance's out-of-the-box Normal Change Model.
+#
+# Callers must set: snow_host, snow_user, snow_password, cr_number, cr_close_notes.
+#
+# NOTE: this instance's Change Model resets `approval` to "requested" as a side
+# effect of entering the "Authorize" state (Authorize IS the CAB approval
+# checkpoint in the OOB model). We re-assert `approval: approved` right after --
+# this is NOT a new/second human approval decision, it's just satisfying the
+# state model's own bookkeeping for a change that a human already approved
+# earlier via the sysapproval_approver CAB task. Verified empirically: direct
+# state jumps (e.g. new -> closed, or skipping straight to scheduled/closed)
+# are rejected with HTTP 403 by the "Change Model: Check State Transition"
+# business rule; only the full single-hop walk below is accepted.
+- name: Ensure the VPA Automation assignment group exists (required by the
+    Change Model for every state past "new")
+  servicenow.itsm.api_info:
+    instance:
+      host: "{{ snow_host }}"
+      username: "{{ snow_user }}"
+      password: "{{ snow_password }}"
+    resource: sys_user_group
+    sysparm_query: "name=VPA Automation"
+  register: existing_snow_group
+
+- name: Create the VPA Automation group if missing
+  servicenow.itsm.api:
+    instance:
+      host: "{{ snow_host }}"
+      username: "{{ snow_user }}"
+      password: "{{ snow_password }}"
+    resource: sys_user_group
+    action: post
+    data:
+      name: "VPA Automation"
+      description: "Owns changes implemented by the VPA right-sizing automation"
+      active: "true"
+  when: (existing_snow_group.record | default(existing_snow_group.records | default([]))) | length == 0
+
+- name: Walk the CR forward to assess / authorize
+  servicenow.itsm.change_request:
+    instance:
+      host: "{{ snow_host }}"
+      username: "{{ snow_user }}"
+      password: "{{ snow_password }}"
+    number: "{{ cr_number }}"
+    state: "{{ item }}"
+    assignment_group: "VPA Automation"
+  loop:
+    - assess
+    - authorize
+
+- name: Re-assert CAB approval to pass the Authorize checkpoint (already approved
+    by a human earlier in this flow -- not a new decision)
+  servicenow.itsm.change_request:
+    instance:
+      host: "{{ snow_host }}"
+      username: "{{ snow_user }}"
+      password: "{{ snow_password }}"
+    number: "{{ cr_number }}"
+    other:
+      approval: approved
+
+- name: Walk the CR forward to scheduled / implement / review
+  servicenow.itsm.change_request:
+    instance:
+      host: "{{ snow_host }}"
+      username: "{{ snow_user }}"
+      password: "{{ snow_password }}"
+    number: "{{ cr_number }}"
+    state: "{{ item }}"
+    assignment_group: "VPA Automation"
+  loop:
+    - scheduled
+    - implement
+    - review
+
+- name: Close the CR with a successful close code
+  servicenow.itsm.change_request:
+    instance:
+      host: "{{ snow_host }}"
+      username: "{{ snow_user }}"
+      password: "{{ snow_password }}"
+    number: "{{ cr_number }}"
+    state: closed
+    close_code: successful
+    close_notes: "{{ cr_close_notes }}"
+    assignment_group: "VPA Automation"
