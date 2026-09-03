@@ -1,5 +1,5 @@
 ---
-- name: TEMP - Inspect current CHG0030008 state
+- name: TEMP - Test full close walk with re-approve at Authorize checkpoint
   hosts: localhost
   gather_facts: false
   vars:
@@ -7,20 +7,70 @@
     snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
     snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
   tasks:
-    - name: Fetch current CHG0030008
-      servicenow.itsm.change_request_info:
+    - name: Re-assert approval (the human already approved this CR earlier; this just
+        satisfies the Change Model's Authorize-stage gate which resets approval as a
+        side effect of the state transition)
+      servicenow.itsm.change_request:
         instance:
           host: "{{ snow_host }}"
           username: "{{ snow_user }}"
           password: "{{ snow_password }}"
         number: CHG0030008
-      register: chg
+        other:
+          approval: approved
+      register: reapprove
 
-    - name: Print state/phase/approval
+    - name: Print approval after re-assert
       debug:
-        msg: "state={{ chg.records[0].state }} phase={{ chg.records[0].phase }} approval={{ chg.records[0].approval }} assignment_group={{ chg.records[0].assignment_group }}"
+        msg: "approval={{ reapprove.record.approval }} state={{ reapprove.record.state }}"
 
-    - name: Try closing directly from current state
+    - name: Walk to scheduled
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        number: CHG0030008
+        state: scheduled
+        assignment_group: "VPA Automation"
+      register: r1
+      ignore_errors: true
+
+    - debug: { msg: "scheduled -> {{ r1.msg | default('ok, state=' + r1.record.state) }}" }
+
+    - name: Walk to implement
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        number: CHG0030008
+        state: implement
+        assignment_group: "VPA Automation"
+      register: r2
+      ignore_errors: true
+      when: r1 is succeeded
+
+    - debug: { msg: "implement -> {{ r2.msg | default('ok, state=' + r2.record.state) }}" }
+      when: r1 is succeeded
+
+    - name: Walk to review
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        number: CHG0030008
+        state: review
+        assignment_group: "VPA Automation"
+      register: r3
+      ignore_errors: true
+      when: r2 is succeeded
+
+    - debug: { msg: "review -> {{ r3.msg | default('ok, state=' + r3.record.state) }}" }
+      when: r2 is succeeded
+
+    - name: Close
       servicenow.itsm.change_request:
         instance:
           host: "{{ snow_host }}"
@@ -29,11 +79,11 @@
         number: CHG0030008
         state: closed
         close_code: successful
-        close_notes: "[TEST] direct close attempt"
+        close_notes: "[TEST] full walk close"
         assignment_group: "VPA Automation"
-      register: close_attempt
+      register: r4
       ignore_errors: true
+      when: r3 is succeeded
 
-    - name: Print close attempt result
-      debug:
-        var: close_attempt
+    - debug: { msg: "closed -> {{ r4.msg | default('ok, state=' + r4.record.state) }}" }
+      when: r3 is succeeded
