@@ -40,17 +40,28 @@
   when: (existing_snow_group.record | default(existing_snow_group.records | default([]))) | length == 0
 
 - name: Walk the CR forward to assess / authorize
+  # NOTE: uses a non-default loop_var (cr_state, not item) because this task
+  # file is include_tasks'd from within an outer `loop: "{{ some_crs }}"` in
+  # some callers (e.g. vpa_reconcile_change_requests.yml, vpa_resolve_change_request.yml)
+  # -- reusing the default `item` name here would silently shadow the outer
+  # loop's `item` for the rest of that outer iteration once Ansible re-templates
+  # it, breaking `cr_number`/`cr_close_notes` (which are themselves templated
+  # off the outer `item`) partway through this file (confirmed: this broke the
+  # reconciliation sweep with "'...AnsibleUnicode object' has no attribute
+  # 'number'" the first time it ran against more than a single CR inline).
   servicenow.itsm.change_request:
     instance:
       host: "{{ snow_host }}"
       username: "{{ snow_user }}"
       password: "{{ snow_password }}"
     number: "{{ cr_number }}"
-    state: "{{ item }}"
+    state: "{{ cr_state }}"
     assignment_group: "VPA Automation"
   loop:
     - assess
     - authorize
+  loop_control:
+    loop_var: cr_state
 
 - name: Re-assert CAB approval to pass the Authorize checkpoint (already approved
     by a human earlier in this flow -- not a new decision)
@@ -70,12 +81,14 @@
       username: "{{ snow_user }}"
       password: "{{ snow_password }}"
     number: "{{ cr_number }}"
-    state: "{{ item }}"
+    state: "{{ cr_state }}"
     assignment_group: "VPA Automation"
   loop:
     - scheduled
     - implement
     - review
+  loop_control:
+    loop_var: cr_state
 
 - name: Close the CR with a successful close code
   servicenow.itsm.change_request:
