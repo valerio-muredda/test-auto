@@ -159,6 +159,63 @@
         msg: "Opened PR: {{ pr_result.json.html_url }}"
       when: manifest_changed | bool
 
+    # --- Auto-merge (Option C) -------------------------------------------
+    # Only auto-merge when this run was triggered by an *already-approved*
+    # Change Request (chain 2 / the CR-gate rulebook sets change_number).
+    # A human already signed off in the CAB approval step, so requiring a
+    # second manual "merge" click on GitHub would just be a redundant gate
+    # that stalls the loop. When this playbook is run directly/ad hoc
+    # (change_number empty), the PR remains the only gate and stays open
+    # for a manual merge, as before.
+    - name: Determine whether this run is eligible for auto-merge
+      set_fact:
+        auto_merge_eligible: "{{ manifest_changed | bool and (change_number | length > 0) }}"
+
+    - name: Poll the PR until GitHub finishes computing mergeability
+      # `mergeable` is null for a few seconds right after a PR is created
+      # while GitHub computes it in the background - retry until it settles.
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ github_repo_owner }}/{{ github_repo_name }}/pulls/{{ pr_result.json.number }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ github_token }}"
+          Accept: "application/vnd.github+json"
+        status_code: [200]
+      register: pr_status
+      until: pr_status.json.mergeable is not none
+      retries: 10
+      delay: 3
+      when: auto_merge_eligible | bool
+
+    - name: Auto-merge the PR now that the Change Request has already been approved
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ github_repo_owner }}/{{ github_repo_name }}/pulls/{{ pr_result.json.number }}/merge"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ github_token }}"
+          Accept: "application/vnd.github+json"
+        body_format: json
+        body:
+          merge_method: squash
+        status_code: [200]
+      register: merge_result
+      when: auto_merge_eligible | bool and (pr_status.json.mergeable | default(false) | bool)
+
+    - name: Print auto-merge result
+      ansible.builtin.debug:
+        msg: "Auto-merged PR: {{ pr_result.json.html_url }} (ArgoCD will sync shortly)"
+      when: auto_merge_eligible | bool and (pr_status.json.mergeable | default(false) | bool)
+
+    - name: Warn when auto-merge could not proceed (conflict or not yet mergeable)
+      ansible.builtin.debug:
+        msg: >-
+          NOT auto-merged: PR {{ pr_result.json.html_url }} is not cleanly mergeable
+          (mergeable={{ pr_status.json.mergeable | default('unknown') }}). Likely a
+          conflicting change from another remediation run in flight. Leaving the PR
+          open for manual resolution/merge.
+      when: auto_merge_eligible | bool and not (pr_status.json.mergeable | default(false) | bool)
+    # -----------------------------------------------------------------------
+
     - name: Find related ServiceNow incident(s) via correlation_id
       servicenow.itsm.incident_info:
         instance:
@@ -198,7 +255,7 @@
             ArgoCD will sync automatically once merged.
       when: manifest_changed | bool and open_incidents | length > 0
 
-    - name: Update the approved Change Request with the PR link (real gate closed the loop)
+    - name: Update the approved Change Request with the PR link and auto-merge outcome
       servicenow.itsm.change_request:
         instance:
           host: "{{ snow_host }}"
@@ -207,10 +264,18 @@
         number: "{{ change_number }}"
         other:
           work_notes: >-
+            {% if auto_merge_eligible | bool and (pr_status.json.mergeable | default(false) | bool) %}
+            Approved change implemented and auto-merged: Pull Request {{ pr_result.json.html_url }}
+            (updating {{ alert_container }} resources in {{ alert_namespace }}) was merged
+            automatically since this Change Request was already approved. ArgoCD is syncing
+            the change now. Please close this CR once you've confirmed the rollout.
+            {% else %}
             Approved change implemented: opened Pull Request {{ pr_result.json.html_url }}
-            to update {{ alert_container }} resources in {{ alert_namespace }}.
-            ArgoCD will sync automatically once merged. Please close this CR once you've
-            confirmed the rollout.
+            to update {{ alert_container }} resources in {{ alert_namespace }}, but it could
+            NOT be auto-merged (mergeable={{ pr_status.json.mergeable | default('unknown') }}) -
+            likely a conflicting change from another remediation run. Please merge it manually,
+            then close this CR once you've confirmed the rollout.
+            {% endif %}
       when: manifest_changed | bool and change_number | length > 0
 
     - name: Note on the Change Request when no remediation was actually needed
