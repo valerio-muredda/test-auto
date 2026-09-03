@@ -56,14 +56,24 @@
       register: all_crs
 
     - name: Identify decided-but-not-closed change requests, outside the grace period
+      # NOTE: deliberately keyed on approval_set (the timestamp the approval
+      # decision was made), NOT sys_updated_on. sys_updated_on is bumped every
+      # time vpa_open_change_request.yml adds a "still firing" work note to an
+      # already-open CR (correct behavior for repeat notifications while an
+      # alert is actively firing) -- using it here would mean a CR that is
+      # both stuck AND still getting repeat-notification work notes would
+      # *never* clear the grace period and never get reconciled. approval_set
+      # is written once, when the decision is made, and isn't touched by
+      # those work-note-only updates.
       set_fact:
         stuck_crs: >-
           {{
             (all_crs.record | default(all_crs.records | default([])))
             | rejectattr('state', 'in', closed_states)
             | rejectattr('approval', 'in', pending_approvals)
-            | selectattr('sys_updated_on', 'defined')
-            | selectattr('sys_updated_on', '<', reconcile_cutoff)
+            | selectattr('approval_set', 'defined')
+            | selectattr('approval_set', '!=', '')
+            | selectattr('approval_set', '<', reconcile_cutoff)
             | list
           }}
 
