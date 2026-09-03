@@ -1,0 +1,18 @@
+---
+- name: TEMP - Final audit of all VPA change requests
+  hosts: localhost
+  gather_facts: false
+  vars:
+    snow_host: "{{ lookup('env', 'SN_HOST') }}"
+    snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
+    snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
+  tasks:
+    - servicenow.itsm.api_info:
+        instance: {host: "{{ snow_host }}", username: "{{ snow_user }}", password: "{{ snow_password }}"}
+        resource: change_request
+        sysparm_query: "correlation_idSTARTSWITHvpa-rightsizing"
+      register: crs
+    - debug:
+        msg: "{{ item.number }} state={{ item.state }} approval={{ item.approval }} close_code={{ item.close_code }}"
+      loop: "{{ (crs.record | default(crs.records | default([]))) | sort(attribute='number') }}"
+      loop_control: { label: "{{ item.number }}" }
