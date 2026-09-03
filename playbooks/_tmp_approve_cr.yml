@@ -1,0 +1,35 @@
+---
+- name: TEMP - Approve a change request via sysapproval_approver
+  hosts: localhost
+  gather_facts: false
+  vars:
+    snow_host: "{{ lookup('env', 'SN_HOST') }}"
+    snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
+    snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
+    cr_number: "CHG0030011"
+  tasks:
+    - name: Fetch the CR
+      servicenow.itsm.change_request_info:
+        instance: {host: "{{ snow_host }}", username: "{{ snow_user }}", password: "{{ snow_password }}"}
+        number: "{{ cr_number }}"
+      register: chg
+
+    - debug:
+        msg: "state={{ chg.records[0].state }} approval={{ chg.records[0].approval }}"
+
+    - name: Find pending approver record(s)
+      servicenow.itsm.api_info:
+        instance: {host: "{{ snow_host }}", username: "{{ snow_user }}", password: "{{ snow_password }}"}
+        resource: sysapproval_approver
+        sysparm_query: "document_id={{ chg.records[0].sys_id }}^state=requested"
+      register: approvers
+
+    - name: Approve the CAB task(s)
+      servicenow.itsm.api:
+        instance: {host: "{{ snow_host }}", username: "{{ snow_user }}", password: "{{ snow_password }}"}
+        resource: sysapproval_approver
+        sys_id: "{{ item.sys_id }}"
+        action: patch
+        data:
+          state: approved
+      loop: "{{ approvers.record | default([]) }}"
