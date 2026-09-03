@@ -1,5 +1,5 @@
 ---
-- name: TEMP - Test CR close sequence against the real stuck CHG0030008
+- name: TEMP - Inspect current CHG0030008 state
   hosts: localhost
   gather_facts: false
   vars:
@@ -7,49 +7,20 @@
     snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
     snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
   tasks:
-    - name: Check for an existing VPA Automation group
-      servicenow.itsm.api_info:
-        instance:
-          host: "{{ snow_host }}"
-          username: "{{ snow_user }}"
-          password: "{{ snow_password }}"
-        resource: sys_user_group
-        sysparm_query: "name=VPA Automation"
-      register: existing_group
-
-    - name: Create VPA Automation assignment group if missing
-      servicenow.itsm.api:
-        instance:
-          host: "{{ snow_host }}"
-          username: "{{ snow_user }}"
-          password: "{{ snow_password }}"
-        resource: sys_user_group
-        action: post
-        data:
-          name: "VPA Automation"
-          description: "Owns changes implemented by the VPA right-sizing automation"
-          active: "true"
-      when: (existing_group.record | default(existing_group.records | default([]))) | length == 0
-      register: created_group
-
-    - name: Walk CHG0030008 through assess -> authorize -> scheduled -> implement -> review
-      servicenow.itsm.change_request:
+    - name: Fetch current CHG0030008
+      servicenow.itsm.change_request_info:
         instance:
           host: "{{ snow_host }}"
           username: "{{ snow_user }}"
           password: "{{ snow_password }}"
         number: CHG0030008
-        state: "{{ item }}"
-        assignment_group: "VPA Automation"
-      loop:
-        - assess
-        - authorize
-        - scheduled
-        - implement
-        - review
-      register: walk_result
+      register: chg
 
-    - name: Close CHG0030008 with close_code
+    - name: Print state/phase/approval
+      debug:
+        msg: "state={{ chg.records[0].state }} phase={{ chg.records[0].phase }} approval={{ chg.records[0].approval }} assignment_group={{ chg.records[0].assignment_group }}"
+
+    - name: Try closing directly from current state
       servicenow.itsm.change_request:
         instance:
           host: "{{ snow_host }}"
@@ -58,10 +29,11 @@
         number: CHG0030008
         state: closed
         close_code: successful
-        close_notes: "[TEST] Verifying automated proper-close sequence works on this instance."
+        close_notes: "[TEST] direct close attempt"
         assignment_group: "VPA Automation"
-      register: close_result
+      register: close_attempt
+      ignore_errors: true
 
-    - name: Print final state
+    - name: Print close attempt result
       debug:
-        msg: "final state={{ close_result.record.state }} close_code={{ close_result.record.close_code }}"
+        var: close_attempt
