@@ -40,24 +40,37 @@ def _to_bytes(value):
 def main():
     manifest_path, container_name, cpu, memory = sys.argv[1:5]
 
+    # The manifest is a multi-document YAML file (Deployment + Service, etc.)
+    # separated by `---`, so every document must be loaded/dumped as a list,
+    # not just the first one -- loading only the first document would
+    # silently truncate the file to just the Deployment on write.
     try:
         from ruamel.yaml import YAML
         yaml = YAML()
         yaml.preserve_quotes = True
         with open(manifest_path) as f:
-            data = yaml.load(f)
-        _patch(data, container_name, cpu, memory)
+            docs = list(yaml.load_all(f))
+        _patch_docs(docs, container_name, cpu, memory)
         with open(manifest_path, "w") as f:
-            yaml.dump(data, f)
+            yaml.dump_all(docs, f)
     except ImportError:
         import yaml as pyyaml
         with open(manifest_path) as f:
-            data = pyyaml.safe_load(f)
-        _patch(data, container_name, cpu, memory)
+            docs = list(pyyaml.safe_load_all(f))
+        _patch_docs(docs, container_name, cpu, memory)
         with open(manifest_path, "w") as f:
-            pyyaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+            pyyaml.safe_dump_all(docs, f, default_flow_style=False, sort_keys=False)
 
     print(f"Updated {container_name} resources in {manifest_path}: cpu={cpu} memory={memory}")
+
+
+def _patch_docs(docs, container_name, cpu, memory):
+    for doc in docs:
+        if isinstance(doc, dict) and doc.get("kind") == "Deployment":
+            _patch(doc, container_name, cpu, memory)
+            return
+    raise SystemExit(f"No Deployment document found in manifest (found kinds: "
+                      f"{[d.get('kind') if isinstance(d, dict) else d for d in docs]})")
 
 
 def _patch(data, container_name, cpu, memory):
