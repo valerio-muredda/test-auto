@@ -12,9 +12,12 @@
     snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
     snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
     correlation_id: "vpa-rightsizing:{{ alert_namespace }}:{{ alert_container }}:{{ alert_name }}"
-    # Raw change_request.state values that mean the CR is no longer pending:
-    # 3=Closed, 4=Canceled
-    closed_states: ["3", "4"]
+    # change_request.state values that mean the CR is no longer pending.
+    # Raw codes: 3=Closed, 4=Canceled. This ServiceNow instance's Table API
+    # returns *display values* by default (e.g. "Closed"/"Canceled"), not the
+    # raw numeric code the servicenow.itsm collection's docs assume -- match
+    # both forms so dedup works regardless of sysparm_display_value behavior.
+    closed_states: ["3", "4", "closed", "canceled", "Closed", "Canceled"]
 
   tasks:
     - name: Fetch VPA objects in the alert namespace for context

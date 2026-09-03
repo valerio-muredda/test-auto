@@ -171,8 +171,11 @@
       when: manifest_changed | bool
 
     - name: Filter to incidents that are still open (not resolved/closed)
+      # NOTE: this ServiceNow instance's Table API returns display values for
+      # choice fields (e.g. state="Closed"), not the raw numeric code ("7").
+      # Match both forms so dedup works regardless of display-value behavior.
       set_fact:
-        open_incidents: "{{ existing_incidents.records | default([]) | rejectattr('state', 'in', ['6', '7']) | list }}"
+        open_incidents: "{{ existing_incidents.records | default([]) | rejectattr('state', 'in', ['6', '7', 'resolved', 'closed', 'Resolved', 'Closed']) | list }}"
       when: manifest_changed | bool
 
     - name: Pick the most recently opened incident, if any

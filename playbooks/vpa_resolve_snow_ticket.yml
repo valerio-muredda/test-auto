@@ -20,8 +20,11 @@
       register: existing_incidents
 
     - name: Filter to incidents that are not already closed/resolved
+      # NOTE: this ServiceNow instance's Table API returns display values for
+      # choice fields (e.g. state="Closed"), not the raw numeric code ("7").
+      # Match both forms so dedup works regardless of display-value behavior.
       set_fact:
-        open_incidents: "{{ existing_incidents.records | default([]) | rejectattr('state', 'in', ['6', '7']) | list }}"
+        open_incidents: "{{ existing_incidents.records | default([]) | rejectattr('state', 'in', ['6', '7', 'resolved', 'closed', 'Resolved', 'Closed']) | list }}"
 
     - name: Resolve incident(s) if found
       servicenow.itsm.incident:

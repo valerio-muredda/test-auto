@@ -42,8 +42,12 @@
       register: existing_incidents
 
     - name: Filter to incidents that are still open (not resolved/closed)
+      # NOTE: this ServiceNow instance's Table API returns *display values* for
+      # choice fields by default (e.g. state="Closed"), not the raw numeric
+      # code ("7") the servicenow.itsm collection's docs assume. Match both
+      # forms so dedup works regardless of sysparm_display_value behavior.
       set_fact:
-        open_incidents: "{{ existing_incidents.records | default([]) | rejectattr('state', 'in', ['6', '7']) | list }}"
+        open_incidents: "{{ existing_incidents.records | default([]) | rejectattr('state', 'in', ['6', '7', 'resolved', 'closed', 'Resolved', 'Closed']) | list }}"
 
     - name: Pick the most recently opened incident, if any
       set_fact:

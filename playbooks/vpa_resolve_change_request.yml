@@ -11,8 +11,11 @@
     snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
     snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
     correlation_id: "vpa-rightsizing:{{ alert_namespace }}:{{ alert_container }}:{{ alert_name }}"
-    closed_states: ["3", "4"]
-    pending_approvals: ["requested", "not requested"]
+    # This ServiceNow instance's Table API returns *display values* by default
+    # (e.g. state="Closed", approval="Requested"), not the raw lowercase/numeric
+    # codes the servicenow.itsm collection's docs assume -- match both forms.
+    closed_states: ["3", "4", "closed", "canceled", "Closed", "Canceled"]
+    pending_approvals: ["requested", "not requested", "Requested", "Not Requested"]
 
   tasks:
     - name: Find change request(s) for this alert via correlation_id
