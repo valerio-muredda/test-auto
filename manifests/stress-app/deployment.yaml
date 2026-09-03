@@ -86,3 +86,15 @@ spec:
             # the pod. Requests are left untouched so VPA's over/under-provisioned
             # ratios still compare against the same 250Mi/224m baseline.
             memory: 768Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stress-app
+  namespace: rightsizing-demo
+spec:
+  selector:
+    app: stress-app
+  ports:
+    - port: 80
+      targetPort: 9090
