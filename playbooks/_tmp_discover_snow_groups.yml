@@ -1,0 +1,40 @@
+---
+# Temporary, read-only diagnostic playbook: lists active ServiceNow assignment
+# groups so we know a valid value to use for change_request state transitions
+# (assignment_group is mandatory for assess/authorize/scheduled/implement/review/closed).
+# Safe to delete after use.
+- name: TEMP - Discover ServiceNow assignment groups
+  hosts: localhost
+  gather_facts: false
+  vars:
+    snow_host: "{{ lookup('env', 'SN_HOST') }}"
+    snow_user: "{{ lookup('env', 'SN_USERNAME') }}"
+    snow_password: "{{ lookup('env', 'SN_PASSWORD') }}"
+  tasks:
+    - name: List active assignment groups
+      servicenow.itsm.api_info:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        resource: sys_user_group
+        sysparm_query: "active=true"
+      register: groups
+
+    - name: Print group names
+      debug:
+        msg: "{{ (groups.record | default(groups.records | default([]))) | map(attribute='name') | list }}"
+
+    - name: Fetch current CHG0030008 raw state/assignment_group
+      servicenow.itsm.change_request_info:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_password }}"
+        number: CHG0030008
+      register: chg
+      ignore_errors: true
+
+    - name: Print CHG0030008
+      debug:
+        var: chg.records
