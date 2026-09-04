@@ -1,39 +1,14 @@
-VPA-Driven Resource Right-Sizing with EDA + AAP on OpenShift
+# VPA-Driven Resource Right-Sizing with EDA + AAP on OpenShift
 
-Scenario: cluster-wide pod resource optimization using Vertical Pod Autoscaler (VPA) in "Inform" mode, surfacing recommendations as Prometheus alerts, triggering AAP Event-Driven Ansible (EDA) workflows, creating ServiceNow tickets for human-in-the-loop approval, and executing remediation via ArgoCD.
+## Scenario: 
+cluster-wide pod resource optimization using Vertical Pod Autoscaler (VPA) in **Inform** mode, surfacing recommendations as Prometheus alerts, triggering AAP Event-Driven Ansible (EDA) workflows, creating ServiceNow tickets for human-in-the-loop approval, and executing remediation via ArgoCD.
 
-┌─────────────────────────────────────────────────────────────────────────┐
-│ 	                                                                      │
-│                                                                         │
-│  		  	                     ┌──────────────────────────────────────┐   │
-│  		                         │  OpenShift Cluster                   │   │
-│  		                         │                                      │   │
-│                              │  ┌──────────────┐  ┌─────────────┐   │   │
-│  ┌──────────┐                │  │ Dummy App    │  │   VPA       │   │   │
-│  │  ArgoCD  │ ─── GitOps ──► │  │ (+ Traffic   │  │ (Inform)    │   │   │
-│  └──────────┘                │  │   Gen)       │  └──────┬──────┘   │   │
-│                              │  └──────────────┘         │          │   │
-│  ┌──────────┐                │  ┌──────────────────────┐ │          │   │
-│  │   AAP    │                │  │ Prometheus / OCP     │◄┘          │   │
-│  │  + EDA   │◄── Webhook ────│  │ Monitoring Stack     │            │   │
-│  └────┬─────┘  (AlertMgr)    │  └──────────────────────┘            │   │
-│       │                      └──────────────────────────────────────┘   │
-│       │  ticket                                                         │
-│       ▼                                                                 │
-│  ┌──────────┐                                     			                |
-│  │ServiceNow│                                                           │
-│  └────┬─────┘                                                           │
-│       │ Human approval                                                  │
-│       ▼                                                                 │
-│  ┌──────────┐  patch PR/CR                                              │
-│  │  ArgoCD  │ ────────────► Git Repo (VPA policy / resource manifests)  │
-│  └──────────┘                                                           │
-└─────────────────────────────────────────────────────────────────────────┘
+
+<img width="801" height="638" alt="Screenshot From 2026-09-04 13-03-33" src="https://github.com/user-attachments/assets/6f4ef2e7-1ead-4309-a5d1-d5b7150ca1d7" />
 
 
 
-
-Design decisions:
+## Design decisions:
 
 - VPA runs in "Inform" mode only so it never mutates pods automatically
 - Prometheus scrapes VPA recommender metrics to detect divergence from current requests
@@ -45,7 +20,7 @@ Design decisions:
 
 
 
-⚠️ Disclaimer
+## ⚠️ Disclaimer
 Warning: This software is provided "AS-IS" without any warranties or guarantees of any kind. No QA or formal testing process has been performed.
 
 By using this tool, you acknowledge that:
@@ -56,9 +31,9 @@ The authors are not liable for any damages or issues arising from its use
 
 
 
-Prerequisites:
+## Prerequisites:
 
-┌────────────────────────────────────────────────────────────────────────────────────────────────┐
+
 | Component     | Version                       | Notes                                          |
 |---------------|-------------------------------|------------------------------------------------|
 | OpenShift     | 4.14+                         | OCP Monitoring Stack enabled                   |
@@ -69,4 +44,4 @@ Prerequisites:
 | VPA Operator  | 4.x VerticalPodAutoscaler CRD | Installed via OCP OperatorHub                  |
 | ServiceNow    | Any supported instance        | REST API accessible from OpenShift             |
 | Prometheus    | Cluster Monitoring Operator   | Built-in OCP, user-workload monitoring enabled |
-└────────────────────────────────────────────────────────────────────────────────────────────────┘
+
